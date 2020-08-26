@@ -494,7 +494,7 @@ def resize_image(image, min_dim=None, max_dim=None, padding=False):
             scale = max_dim / image_max
     # Resize image and mask
     if scale != 1:
-        image = scipy.misc.imresize(
+        image = self.imresize(
             image, (round(h * scale), round(w * scale)))
     # Need padding?
     if padding:
@@ -509,6 +509,43 @@ def resize_image(image, min_dim=None, max_dim=None, padding=False):
         window = (top_pad, left_pad, h + top_pad, w + left_pad)
     return image, window, scale, padding
 
+def imresize(arr, size, interp='bilinear', mode=None):
+    """
+    Resize an image.
+    Parameters
+    ----------
+    arr : ndarray
+        The array of image to be resized.
+    size : int, float or tuple
+        * int   - Percentage of current size.
+        * float - Fraction of current size.
+        * tuple - Size of the output image.
+    interp : str, optional
+        Interpolation to use for re-sizing ('nearest', 'bilinear', 'bicubic'
+        or 'cubic').
+    mode : str, optional
+        The PIL image mode ('P', 'L', etc.) to convert `arr` before resizing.
+    Returns
+    -------
+    imresize : ndarray
+        The resized array of image.
+    See Also
+    --------
+    toimage : Implicitly used to convert `arr` according to `mode`.
+    scipy.ndimage.zoom : More generic implementation that does not use PIL.
+    """
+    im = toimage(arr, mode=mode)
+    ts = type(size)
+    if issubdtype(ts, int):
+        percent = size / 100.0
+        size = tuple((array(im.size)*percent).astype(int))
+    elif issubdtype(type(size), float):
+        size = tuple((array(im.size)*size).astype(int))
+    else:
+        size = (size[1], size[0])
+    func = {'nearest': 0, 'bilinear': 2, 'bicubic': 3, 'cubic': 3}
+    imnew = im.resize(size, resample=func[interp])
+    return fromimage(imnew)
 
 def resize_mask(mask, scale, padding):
     """Resizes a mask using the given scale and padding.
