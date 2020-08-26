@@ -672,7 +672,7 @@ def minimize_mask(bbox, mask, mini_shape):
         m = m[y1:y2, x1:x2]
         if m.size == 0:
             raise Exception("Invalid bounding box with area of zero")
-        m = scipy.misc.imresize(m.astype(float), mini_shape, interp='bilinear')
+        m = self.imresize(m.astype(float), mini_shape, interp='bilinear')
         # _positon = np.argmax(m)  # get the index of max in the a
         # m_index, n_index = divmod(_positon, mini_shape[0])
         # print("Max in oringal:", (m_index, n_index), m[m_index, n_index])
@@ -766,7 +766,7 @@ def expand_mask(bbox, mini_mask, image_shape):
         y1, x1, y2, x2 = bbox[i][:4]
         h = y2 - y1
         w = x2 - x1
-        m = scipy.misc.imresize(m.astype(float), (h, w), interp='bilinear')
+        m = self.imresize(m.astype(float), (h, w), interp='bilinear')
         # _positon = np.argmax(m)  # get the index of max in the a
         # m_index, n_index = divmod(_positon, w)
         # print("Max in resize:", (m_index, n_index), m[m_index, n_index])
@@ -790,7 +790,7 @@ def unmold_mask(mask, bbox, image_shape):
     """
     threshold = 0.5
     y1, x1, y2, x2 = bbox
-    mask = scipy.misc.imresize(
+    mask = self.imresize(
         mask, (y2 - y1, x2 - x1), interp='bilinear').astype(np.float32) / 255.0
     mask = np.where(mask >= threshold, 1, 0).astype(np.uint8)
 
