@@ -18,6 +18,8 @@ import skimage.color
 import skimage.io
 import urllib.request
 import shutil
+import PIL
+
 
 # URL from which to download the latest COCO trained weights
 COCO_MODEL_URL = "https://github.com/Superlee506/Mask_RCNN_Humanpose/releases/download/v0.9-alpha/mask_rcnn_coco_humanpose.h5"
@@ -494,7 +496,7 @@ def resize_image(image, min_dim=None, max_dim=None, padding=False):
             scale = max_dim / image_max
     # Resize image and mask
     if scale != 1:
-        image = self.imresize(
+        image = imresize(
             image, (round(h * scale), round(w * scale)))
     # Need padding?
     if padding:
@@ -508,7 +510,182 @@ def resize_image(image, min_dim=None, max_dim=None, padding=False):
         image = np.pad(image, padding, mode='constant', constant_values=0)
         window = (top_pad, left_pad, h + top_pad, w + left_pad)
     return image, window, scale, padding
+	
+# Returns a byte-scaled image
+def bytescale(data, cmin=None, cmax=None, high=255, low=0):
+    """
+    Byte scales an array (image).
+    Byte scaling means converting the input image to uint8 dtype and scaling
+    the range to ``(low, high)`` (default 0-255).
+    If the input image already has dtype uint8, no scaling is done.
+    Parameters
+    ----------
+    data : ndarray
+        PIL image data array.
+    cmin : scalar, optional
+        Bias scaling of small values. Default is ``data.min()``.
+    cmax : scalar, optional
+        Bias scaling of large values. Default is ``data.max()``.
+    high : scalar, optional
+        Scale max value to `high`.  Default is 255.
+    low : scalar, optional
+        Scale min value to `low`.  Default is 0.
+    Returns
+    -------
+    img_array : uint8 ndarray
+        The byte-scaled array.
+    Examples
+    --------
+    >>> from scipy.misc import bytescale
+    >>> img = np.array([[ 91.06794177,   3.39058326,  84.4221549 ],
+    ...                 [ 73.88003259,  80.91433048,   4.88878881],
+    ...                 [ 51.53875334,  34.45808177,  27.5873488 ]])
+    >>> bytescale(img)
+    array([[255,   0, 236],
+           [205, 225,   4],
+           [140,  90,  70]], dtype=uint8)
+    >>> bytescale(img, high=200, low=100)
+    array([[200, 100, 192],
+           [180, 188, 102],
+           [155, 135, 128]], dtype=uint8)
+    >>> bytescale(img, cmin=0, cmax=255)
+    array([[91,  3, 84],
+           [74, 81,  5],
+           [52, 34, 28]], dtype=uint8)
+    """
+    if data.dtype == np.uint8:
+        return data
 
+    if high > 255:
+        raise ValueError("`high` should be less than or equal to 255.")
+    if low < 0:
+        raise ValueError("`low` should be greater than or equal to 0.")
+    if high < low:
+        raise ValueError("`high` should be greater than or equal to `low`.")
+
+    if cmin is None:
+        cmin = data.min()
+    if cmax is None:
+        cmax = data.max()
+
+    cscale = cmax - cmin
+    if cscale < 0:
+        raise ValueError("`cmax` should be larger than `cmin`.")
+    elif cscale == 0:
+        cscale = 1
+
+    scale = float(high - low) / cscale
+    bytedata = (data - cmin) * scale + low
+    return (bytedata.clip(low, high) + 0.5).astype(np.uint8)
+	
+	
+def toimage(arr, high=255, low=0, cmin=None, cmax=None, pal=None,
+            mode=None, channel_axis=None):
+    """Takes a numpy array and returns a PIL image.
+    The mode of the PIL image depends on the array shape and the `pal` and
+    `mode` keywords.
+    For 2-D arrays, if `pal` is a valid (N,3) byte-array giving the RGB values
+    (from 0 to 255) then ``mode='P'``, otherwise ``mode='L'``, unless mode
+    is given as 'F' or 'I' in which case a float and/or integer array is made.
+    Notes
+    -----
+    For 3-D arrays, the `channel_axis` argument tells which dimension of the
+    array holds the channel data.
+    For 3-D arrays if one of the dimensions is 3, the mode is 'RGB'
+    by default or 'YCbCr' if selected.
+    The numpy array must be either 2 dimensional or 3 dimensional.
+    """
+    data = np.asarray(arr)
+    if np.iscomplexobj(data):
+        raise ValueError("Cannot convert a complex-valued array.")
+    shape = list(data.shape)
+    valid = len(shape) == 2 or ((len(shape) == 3) and
+                                ((3 in shape) or (4 in shape)))
+    if not valid:
+        raise ValueError("'arr' does not have a suitable array shape for "
+                         "any mode.")
+    if len(shape) == 2:
+        shape = (shape[1], shape[0])  # columns show up first
+        if mode == 'F':
+            data32 = data.astype(numpy.float32)
+            image = PIL.Image.frombytes(mode, shape, data32.tostring())
+            return image
+        if mode in [None, 'L', 'P']:
+            bytedata = bytescale(data, high=high, low=low,
+                                 cmin=cmin, cmax=cmax)
+            image = PIL.Image.frombytes('L', shape, bytedata.tostring())
+            if pal is not None:
+                image.putpalette(np.asarray(pal, dtype=np.uint8).tostring())
+                # Becomes a mode='P' automagically.
+            elif mode == 'P':  # default gray-scale
+                pal = (arange(0, 256, 1, dtype=np.uint8)[:, newaxis] *
+                       ones((3,), dtype=np.uint8)[newaxis, :])
+                image.putpalette(np.asarray(pal, dtype=np.uint8).tostring())
+            return image
+        if mode == '1':  # high input gives threshold for 1
+            bytedata = (data > high)
+            image = PIL.Image.frombytes('1', shape, bytedata.tostring())
+            return image
+        if cmin is None:
+            cmin = amin(ravel(data))
+        if cmax is None:
+            cmax = amax(ravel(data))
+        data = (data*1.0 - cmin)*(high - low)/(cmax - cmin) + low
+        if mode == 'I':
+            data32 = data.astype(numpy.uint32)
+            image = PIL.Image.frombytes(mode, shape, data32.tostring())
+        else:
+            raise ValueError(_errstr)
+        return image
+
+    # if here then 3-d array with a 3 or a 4 in the shape length.
+    # Check for 3 in datacube shape --- 'RGB' or 'YCbCr'
+    if channel_axis is None:
+        if (3 in shape):
+            ca = numpy.flatnonzero(np.asarray(shape) == 3)[0]
+        else:
+            ca = numpy.flatnonzero(np.asarray(shape) == 4)
+            if len(ca):
+                ca = ca[0]
+            else:
+                raise ValueError("Could not find channel dimension.")
+    else:
+        ca = channel_axis
+
+    numch = shape[ca]
+    if numch not in [3, 4]:
+        raise ValueError("Channel axis dimension is not valid.")
+
+    bytedata = bytescale(data, high=high, low=low, cmin=cmin, cmax=cmax)
+    if ca == 2:
+        strdata = bytedata.tostring()
+        shape = (shape[1], shape[0])
+    elif ca == 1:
+        strdata = transpose(bytedata, (0, 2, 1)).tostring()
+        shape = (shape[2], shape[0])
+    elif ca == 0:
+        strdata = transpose(bytedata, (1, 2, 0)).tostring()
+        shape = (shape[2], shape[1])
+    if mode is None:
+        if numch == 3:
+            mode = 'RGB'
+        else:
+            mode = 'RGBA'
+
+    if mode not in ['RGB', 'RGBA', 'YCbCr', 'CMYK']:
+        raise ValueError(_errstr)
+
+    if mode in ['RGB', 'YCbCr']:
+        if numch != 3:
+            raise ValueError("Invalid array shape for mode.")
+    if mode in ['RGBA', 'CMYK']:
+        if numch != 4:
+            raise ValueError("Invalid array shape for mode.")
+
+    # Here we know data and mode is correct
+    image = PIL.Image.frombytes(mode, shape, strdata)
+    return image
+	
 def imresize(arr, size, interp='bilinear', mode=None):
     """
     Resize an image.
@@ -536,17 +713,66 @@ def imresize(arr, size, interp='bilinear', mode=None):
     """
     im = toimage(arr, mode=mode)
     ts = type(size)
-    if issubdtype(ts, int):
+    if np.issubdtype(ts, int):
         percent = size / 100.0
         size = tuple((array(im.size)*percent).astype(int))
-    elif issubdtype(type(size), float):
+    elif np.issubdtype(type(size), float):
         size = tuple((array(im.size)*size).astype(int))
     else:
         size = (size[1], size[0])
     func = {'nearest': 0, 'bilinear': 2, 'bicubic': 3, 'cubic': 3}
     imnew = im.resize(size, resample=func[interp])
     return fromimage(imnew)
+	
+def fromimage(im, flatten=False, mode=None):
+    """
+    Return a copy of a PIL image as a numpy array.
+    Parameters
+    ----------
+    im : PIL image
+        Input image.
+    flatten : bool
+        If true, convert the output to grey-scale.
+    mode : str, optional
+        Mode to convert image to, e.g. ``'RGB'``.  See the Notes of the
+        `imread` docstring for more details.
+    Returns
+    -------
+    fromimage : ndarray
+        The different colour bands/channels are stored in the
+        third dimension, such that a grey-image is MxN, an
+        RGB-image MxNx3 and an RGBA-image MxNx4.
+    """
+    if not PIL.Image.isImageType(im):
+        raise TypeError("Input is not a PIL image.")
 
+    if mode is not None:
+        if mode != im.mode:
+            im = im.convert(mode)
+    elif im.mode == 'P':
+        # Mode 'P' means there is an indexed "palette".  If we leave the mode
+        # as 'P', then when we do `a = array(im)` below, `a` will be a 2-D
+        # containing the indices into the palette, and not a 3-D array
+        # containing the RGB or RGBA values.
+        if 'transparency' in im.info:
+            im = im.convert('RGBA')
+        else:
+            im = im.convert('RGB')
+
+    if flatten:
+        im = im.convert('F')
+    elif im.mode == '1':
+        # Workaround for crash in PIL. When im is 1-bit, the call array(im)
+        # can cause a seg. fault, or generate garbage. See
+        # https://github.com/scipy/scipy/issues/2138 and
+        # https://github.com/python-pillow/Pillow/issues/350.
+        #
+        # This converts im from a 1-bit image to an 8-bit image.
+        im = im.convert('L')
+
+    a = np.array(im)
+    return a
+	
 def resize_mask(mask, scale, padding):
     """Resizes a mask using the given scale and padding.
     Typically, you get the scale and padding from resize_image() to
@@ -672,7 +898,7 @@ def minimize_mask(bbox, mask, mini_shape):
         m = m[y1:y2, x1:x2]
         if m.size == 0:
             raise Exception("Invalid bounding box with area of zero")
-        m = self.imresize(m.astype(float), mini_shape, interp='bilinear')
+        m = imresize(m.astype(float), mini_shape, interp='bilinear')
         # _positon = np.argmax(m)  # get the index of max in the a
         # m_index, n_index = divmod(_positon, mini_shape[0])
         # print("Max in oringal:", (m_index, n_index), m[m_index, n_index])
@@ -698,9 +924,9 @@ def minimize_keypoint_mask(bbox, keypointmask, mini_shape):
                 mini_mask[0, 0, i,j] = 1
                 # mini_mask = mini_mask
             else:
-                scale = np.asarray(mini_shape).astype(float) / m.shape
+                scale = np.np.asarray(mini_shape).astype(float) / m.shape
                 cordys, cordxs = np.where(m == np.max(m))
-                scale = np.asarray(mini_shape).astype(float) / m.shape
+                scale = np.np.asarray(mini_shape).astype(float) / m.shape
                 cordys = (cordys * scale[0] + 0.5).astype(int)
                 cordxs = (cordxs * scale[1] + 0.5).astype(int)
                 cordys[cordys >= mini_shape[0]] = mini_shape[0] - 1
@@ -708,7 +934,7 @@ def minimize_keypoint_mask(bbox, keypointmask, mini_shape):
                 final_y = np.mean(cordys).astype(int)
                 final_x = np.mean(cordxs).astype(int)
                 mini_mask[final_y, final_x, i,j] = 1
-                # scale = np.asarray(mini_shape) / m.shape
+                # scale = np.np.asarray(mini_shape) / m.shape
                 # cord = np.where(m == int(m.max()))
                 # new_cord = np.array([cord[0] * scale[0], cord[1] * scale[1]], dtype=np.int32).reshape(2, )
                 # mini_mask[new_cord[0], new_cord[1], i,j] = 1
@@ -734,13 +960,13 @@ def expand_keypoint_mask(bbox,mini_mask,image_shape):
             result = np.sum(m)
             if(result):
                 cordys, cordxs = np.where(m == np.max(m))
-                scale = np.asarray([h, w]).astype(float) / m.shape
+                scale = np.np.asarray([h, w]).astype(float) / m.shape
                 cordys = (cordys * scale[0] + 0.5).astype(int)
                 cordxs = (cordxs * scale[1] + 0.5).astype(int)
 
                 cordys[cordys >= h] = h - 1
                 cordxs[cordxs >= w] = w - 1
-                m = np.zeros(np.asarray([h, w]).astype(int), dtype=bool)
+                m = np.zeros(np.np.asarray([h, w]).astype(int), dtype=bool)
                 # print("m shape:", np.shape(m))
                 final_y = np.mean(cordys).astype(int)
                 final_x = np.mean(cordxs).astype(int)
@@ -766,7 +992,7 @@ def expand_mask(bbox, mini_mask, image_shape):
         y1, x1, y2, x2 = bbox[i][:4]
         h = y2 - y1
         w = x2 - x1
-        m = self.imresize(m.astype(float), (h, w), interp='bilinear')
+        m = imresize(m.astype(float), (h, w), interp='bilinear')
         # _positon = np.argmax(m)  # get the index of max in the a
         # m_index, n_index = divmod(_positon, w)
         # print("Max in resize:", (m_index, n_index), m[m_index, n_index])
@@ -790,7 +1016,7 @@ def unmold_mask(mask, bbox, image_shape):
     """
     threshold = 0.5
     y1, x1, y2, x2 = bbox
-    mask = self.imresize(
+    mask = imresize(
         mask, (y2 - y1, x2 - x1), interp='bilinear').astype(np.float32) / 255.0
     mask = np.where(mask >= threshold, 1, 0).astype(np.uint8)
 
